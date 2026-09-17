@@ -1,0 +1,1 @@
+javascript:(function(){var id=prompt('Ingrese el ID del Certificado de Hyperion:');if(id){var s=document.createElement('script');s.src='http://localhost:3000/injector.js?id='+encodeURIComponent(id)+'&v='+Date.now();document.head.appendChild(s);}})();
