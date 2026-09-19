@@ -1,5 +1,3 @@
-// frontend-hyperion/src/services/api.ts
-
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
 
 export interface LoginPayload {
@@ -14,24 +12,11 @@ export interface VerifyDniPayload {
   documentNumber: string;
   email: string;
   phone: string;
-  entityType?: 'PERSONA_NATURAL' | 'EMPRESA';
-  planType?: string;
+  entityType: 'PERSONA_NATURAL' | 'EMPRESA';
+  planType: string;
   companyRuc?: string;
   companyName?: string;
   rucType?: string;
-}
-
-export interface VerifyCompanyPayload {
-  fileDni: File;
-  fileRuc?: File;
-  fileVigencia?: File;
-  ruc: string;
-  razonSocial: string;
-  repLegalDni: string;
-  email: string;
-  phone: string;
-  entityType: 'company';
-  planType: string;
 }
 
 type SessionExpiredHandler = () => void;
@@ -41,33 +26,39 @@ export const setOnSessionExpired = (callback: SessionExpiredHandler) => {
   onSessionExpiredCallback = callback;
 };
 
-// 📌 INTERCEPTOR CENTRAL: Procesa las respuestas e intercepta 401 (Sesión Expirada)
+// Error personalizado para identificar expiración de sesión sin colgar memoria
+export class SessionExpiredError extends Error {
+  constructor() {
+    super('SESION_EXPIRADA');
+    this.name = 'SessionExpiredError';
+  }
+}
+
+// 📌 INTERCEPTOR CENTRAL
 async function handleResponse(res: Response) {
-  // 1. SI EL BACKEND RESPONDE 401 (TOKEN EXPIRADO)
   if (res.status === 401) {
     if (onSessionExpiredCallback) {
-      onSessionExpiredCallback(); // Invocación inmediata del Modal Global
+      onSessionExpiredCallback();
     } else if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
       window.location.href = '/login?expired=true';
     }
-    // Retornamos una promesa que no se resuelve como éxito ni como error explotable en las páginas
-    return new Promise(() => {}); 
+    throw new SessionExpiredError();
   }
 
   let data: any = {};
   try {
     data = await res.json();
-  } catch {}
+  } catch { }
 
   if (!res.ok) {
-    throw new Error(data.error || 'Ocurrió un error en la solicitud.');
+    throw new Error(data.error || `Error en la solicitud: ${res.statusText}`);
   }
 
   return data;
 }
 
 export const api = {
-  // 1. Autenticación: Login
+  // 1. Autenticación
   async login(payload: LoginPayload) {
     const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
       method: 'POST',
@@ -75,27 +66,28 @@ export const api = {
       credentials: 'include',
       body: JSON.stringify(payload),
     });
-
     return handleResponse(res);
   },
 
-  // 1.1 Autenticación: Logout (DESTRUYE LA COOKIE AUTH_TOKEN)
   async logout() {
     const res = await fetch(`${BACKEND_URL}/api/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     });
-
     return handleResponse(res);
   },
 
-  // 2. Verificación de expedientes (DNI o Empresa)
-  async verifyDni(payload: VerifyDniPayload) {
-    const isEmpresa = payload.entityType === 'EMPRESA';
+  // 2. Verificación y Registro Unificado
+  verifyDni: async (payload: VerifyDniPayload) => {
     const formData = new FormData();
+    const isEmpresa = payload.entityType === 'EMPRESA';
+
+    // Apuntar a los endpoints dedicados de verificación
+    const endpoint = isEmpresa
+      ? `${BACKEND_URL}/api/verify/company`
+      : `${BACKEND_URL}/api/verify/dni`;
 
     if (isEmpresa) {
-      // Endpoint para solicitudes de Empresa
       formData.append('fileDni', payload.file);
       if (payload.fileRuc) formData.append('fileRuc', payload.fileRuc);
       if (payload.fileVigencia) formData.append('fileVigencia', payload.fileVigencia);
@@ -105,34 +97,26 @@ export const api = {
       formData.append('phone', payload.phone);
       formData.append('companyRuc', payload.companyRuc || '');
       formData.append('companyName', payload.companyName || '');
-
-      const res = await fetch(`${BACKEND_URL}/api/verify/company`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-
-      return handleResponse(res);
+      formData.append('planType', payload.planType);
     } else {
-      // Endpoint para Persona Natural
       formData.append('file', payload.file);
       formData.append('documentNumber', payload.documentNumber);
       formData.append('email', payload.email);
       formData.append('phone', payload.phone);
-      formData.append('entityType', 'PERSONA_NATURAL');
-      formData.append('planType', payload.planType || 'ONE_SHOT');
-
-      const res = await fetch(`${BACKEND_URL}/api/verify/dni`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-
-      return handleResponse(res);
+      formData.append('entityType', payload.entityType);
+      formData.append('planType', payload.planType);
     }
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'include', // Envío explícito de cookies de sesión
+      body: formData,
+    });
+
+    return handleResponse(res);
   },
 
-  // 3. Carga individual de documentos
+  // 3. Carga individual
   async uploadSingleDocument(requestId: string, category: string, file: File) {
     const formData = new FormData();
     formData.append('file', file);
@@ -143,34 +127,29 @@ export const api = {
       body: formData,
       credentials: 'include',
     });
-
     return handleResponse(res);
   },
 
-  // 4. Obtención del listado de certificados
+  // 4. Listado
   async getCertificates() {
     const res = await fetch(`${BACKEND_URL}/api/certificates`, {
       method: 'GET',
       credentials: 'include',
     });
-
     return handleResponse(res);
   },
 
-  // 5. Consulta del detalle de un certificado por ID
+  // 5. Detalle
   async getCertificateById(id: string) {
     const res = await fetch(`${BACKEND_URL}/api/certificates/${id}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
     });
-
     return handleResponse(res);
   },
 
-  // 6. Reemplazar documento rechazado
+  // 6. Reemplazo
   async replaceDocument(id: string, file: File) {
     const formData = new FormData();
     formData.append('file', file);
@@ -180,26 +159,59 @@ export const api = {
       body: formData,
       credentials: 'include',
     });
-
     return handleResponse(res);
   },
 
-  // 7. Consulta externa de RUC
+  // 7. Consulta RUC
   async lookupRuc(ruc: string) {
     try {
       const res = await fetch(`${BACKEND_URL}/api/sunat/ruc/${ruc}`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
       });
-
       const data = await handleResponse(res);
       return { ok: true, data };
     } catch (error: any) {
+      if (error instanceof SessionExpiredError) throw error;
       console.error('Error al invocar API de RUC:', error);
-      return { ok: false, data: { found: false, message: error.message || 'Error de red o conexión.' } };
+      return { ok: false, data: { found: false, message: error.message || 'Error de conexión.' } };
     }
   },
+  async syncBiocamerClient(certificateId: string) {
+    const res = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/sync-biocamer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    return handleResponse(res);
+  },
+  // En frontend/services/api.ts
+
+  checkBiocamerStatus: async (id: string) => {
+    const response = await fetch(`${BACKEND_URL}/api/certificates/${id}/check-biocamer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Error al verificar el estado en BioCamer');
+    }
+    return response.json();
+  },
+
+  autofillCamerfirma: async (certificateId: string) => {
+  const response = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/autofill-camerfirma`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || 'Error al autocompletar en Camerfirma');
+  }
+  return response.json();
+},
+
 };
