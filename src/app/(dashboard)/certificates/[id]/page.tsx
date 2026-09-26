@@ -4,9 +4,10 @@ import React, { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/services/api';
 import CertificateActionsModal from '@/components/CertificateActionsModal';
+import CamerfirmaConfirmationModal from '@/components/CamerfirmaConfirmationModal';
 import {
   FileText, Eye, RefreshCw, MessageSquare,
-  CheckCircle2, ShieldCheck, X, ExternalLink, ArrowLeft, User, AlertTriangle, Loader2, Upload, Building2, UserPlus
+  CheckCircle2, ShieldCheck, X, ExternalLink, ArrowLeft, User, AlertTriangle, Loader2, Upload, Building2, UserPlus, XCircle, Send
 } from 'lucide-react';
 
 export default function CertificateDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -16,9 +17,23 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const [certData, setCertData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const [uploadingCategory, setUploadingCategory] = useState<string | null>(null);
   const [isSyncingBiocamer, setIsSyncingBiocamer] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [isReprocessing, setIsReprocessing] = useState(false);
+
+  // Modal de confirmación con checkbox para Camerfirma
+  const [isCamerfirmaConfirmOpen, setIsCamerfirmaConfirmOpen] = useState(false);
+
+  // Estado para el modal de reemplazo individual de documentos
+  const [replaceModalState, setReplaceModalState] = useState<{
+    isOpen: boolean;
+    category: string;
+    categoryName: string;
+  }>({
+    isOpen: false,
+    category: '',
+    categoryName: ''
+  });
 
   // Visor PDF
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -63,27 +78,15 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
             await fetchCertificateDetail(true);
           }
         } catch {
-          // Ignorar fallos de red en polling de fondo
+          // Ignorar fallos de red silenciosos
         }
-      }, 15000); // Consulta cada 15 segundos
+      }, 15000);
     }
 
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [isIdentityRegistered, isIdentityApproved, certData?.id]);
-
-  const handleSingleFileUpload = async (category: string, file: File) => {
-    setUploadingCategory(category);
-    try {
-      await api.uploadSingleDocument(certData.id, category, file);
-      await fetchCertificateDetail(true);
-    } catch (err: any) {
-      alert(err.message || 'Error al subir el archivo');
-    } finally {
-      setUploadingCategory(null);
-    }
-  };
 
   const handleRegisterInBiocamer = async () => {
     setIsSyncingBiocamer(true);
@@ -117,6 +120,38 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
       alert(err.message || 'Error al consultar estado');
     } finally {
       setIsCheckingStatus(false);
+    }
+  };
+
+  // 🎯 LÓGICA DE RE-PROCESAMIENTO DIRECTO USANDO EL CLIENTE API CENTRALIZADO
+  const handleReprocessDoc = async () => {
+    setIsReprocessing(true);
+    try {
+      // ❌ Antes: const data = await api.reprocessCertificateDoc(certData.id);
+      // ✅ Ahora: Usa el nombre exacto registrado en api.ts
+      const data = await api.reprocessCertificate(certData.id);
+
+      if (data.success) {
+        alert('✓ ¡Datos del titular y ubicación re-extraídos exitosamente con Gemini AI!');
+        await fetchCertificateDetail(true);
+      } else {
+        alert(`Error al re-procesar: ${data.error || 'La IA no pudo leer el PDF.'}`);
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.message || 'Error de conexión al re-procesar el documento.'}`);
+    } finally {
+      setIsReprocessing(false);
+    }
+  };
+
+  // Función ejecutada tras la confirmación del modal con checkbox para Camerfirma
+  const handleExecuteAutofill = async () => {
+    try {
+      const response = await api.autofillCamerfirma(certData.id);
+      alert(response.message || '✓ Formulario autocompletado y PDF adjuntado exitosamente en Camerfirma.');
+      await fetchCertificateDetail(true);
+    } catch (err: any) {
+      throw new Error(err.message || 'Fallo en el servidor al intentar autocompletar el formulario.');
     }
   };
 
@@ -167,12 +202,17 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
 
   const progressText = `${uploadedCount}/${totalRequiredDocs}`;
   const progressPercentage = (uploadedCount / totalRequiredDocs) * 100;
-  const applicantFullName = `${certData.applicantNames || ''} ${certData.applicantSurname1 || ''} ${certData.applicantSurname2 || ''}`.trim() || 'Titular Persona Natural';
-  const headerTitle = isCompany ? (certData.companyName || 'Empresa Sin Razón Social') : applicantFullName;
+  const applicantFullName = `${certData.applicantNames || ''} ${certData.applicantSurname1 || ''} ${certData.applicantSurname2 || ''}`.trim();
+  const isMissingData = !certData.applicantNames || certData.applicantNames === 'NO DETECTADO' || !certData.department;
+  const headerTitle = isCompany ? (certData.companyName || 'Empresa Sin Razón Social') : (isMissingData ? 'NO DETECTADO' : applicantFullName);
 
   const activeDocUrl = selectedDocForPreview?.fileUrl
     ? (selectedDocForPreview.fileUrl.startsWith('http') ? selectedDocForPreview.fileUrl : `${backendBaseUrl}${selectedDocForPreview.fileUrl}`)
     : '';
+
+  const failedDocsReasons = documentsList
+    .map((d: any) => d.verificationResult?.rejectionReason)
+    .filter(Boolean);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto font-sans">
@@ -182,6 +222,24 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
         <span className="text-slate-800 font-medium">{certId}</span>
       </div>
 
+      {/* BANNER GLOBAL DE OBSERVACIÓN O DATOS INCOMPLETOS */}
+      {(isRejected || failedDocsReasons.length > 0 || isMissingData) && (
+        <div className="p-4 bg-amber-50 border-l-4 border-amber-500 rounded-r-2xl shadow-sm space-y-2">
+          <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+            <span>
+              {isMissingData ? 'Información del Titular Pendiente de Extracción' : 'Solicitud Observada por Discrepancia de Datos'}
+            </span>
+          </div>
+          <p className="text-xs text-amber-700">
+            {isMissingData
+              ? 'El documento fue cargado correctamente, pero no se pudieron extraer automáticamente los nombres o la ubicación. Utilice el botón "Re-extraer Datos" o vuelva a subir una copia clara.'
+              : 'Se han encontrado observaciones en la validación de sus documentos. Por favor, revise el motivo señalado abajo y reemplace el archivo correspondiente.'}
+          </p>
+        </div>
+      )}
+
+      {/* ENCABEZADO DE TARJETA */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-[#00668c] text-white flex items-center justify-center font-bold text-xl shadow-md shrink-0">
@@ -200,12 +258,12 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
           </div>
           <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-300 ${isRejected ? 'bg-pink-500' : 'bg-[#00b8b8]'}`}
+              className={`h-full rounded-full transition-all duration-300 ${isRejected ? 'bg-red-500' : 'bg-[#00b8b8]'}`}
               style={{ width: `${progressPercentage}%` }}
             />
           </div>
           <div className="flex justify-end pt-1">
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${isRejected ? 'bg-pink-50 text-pink-600 border-pink-200' : 'bg-teal-50 text-[#00b8b8] border-[#00b8b8]/20'
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${isRejected ? 'bg-red-50 text-red-600 border-red-200' : 'bg-teal-50 text-[#00b8b8] border-[#00b8b8]/20'
               }`}>
               {certData.status === 'EN_REVISION' ? 'En Revisión' : certData.status}
             </span>
@@ -221,8 +279,8 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                 <FileText className="h-5 w-5 text-[#00668c]" />
                 <h2 className="font-bold text-slate-800 text-sm">Documentos Requeridos</h2>
               </div>
-              <button 
-                onClick={handleCheckStatus} 
+              <button
+                onClick={handleCheckStatus}
                 disabled={isCheckingStatus}
                 className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50"
               >
@@ -234,61 +292,87 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
             <div className="divide-y divide-slate-100 text-xs">
               {requiredDocTypes.map((item) => {
                 const docFound = documentsList.find((d: any) => d.category === item.key);
-                const isUploadingThis = uploadingCategory === item.key;
+                const verificationRes = docFound?.verificationResult;
+                const isDocFailed = verificationRes && (!verificationRes.isMatch || verificationRes.rejectionReason);
+
+                // Habilita el botón de reemplazar si no hay doc, está fallido o no se leyeron los datos
+                const shouldShowReplace = !docFound || isDocFailed || isRejected || isMissingData;
 
                 return (
-                  <div key={item.key} className="p-4 sm:p-5 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg shrink-0 ${docFound ? (isRejected ? 'bg-pink-50 text-pink-500' : 'bg-teal-50 text-[#00b8b8]') : 'bg-slate-100 text-slate-400'}`}>
-                        <FileText className="h-5 w-5" />
+                  <div key={item.key} className="p-4 sm:p-5 flex flex-col gap-2">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg shrink-0 ${docFound ? (isDocFailed ? 'bg-red-50 text-red-500' : 'bg-teal-50 text-[#00b8b8]') : 'bg-slate-100 text-slate-400'}`}>
+                          <FileText className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-sm">{item.label}</h3>
+                          <p className="text-[11px] text-slate-400 mt-0.5">{docFound ? docFound.fileName : item.desc}</p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-bold text-slate-800 text-sm">{item.label}</h3>
-                        <p className="text-[11px] text-slate-400 mt-0.5">{docFound ? docFound.fileName : item.desc}</p>
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 sm:gap-3">
-                      {docFound ? (
-                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${isRejected ? 'bg-pink-100 text-pink-600' : 'bg-teal-100 text-[#00b8b8]'}`}>
-                          <CheckCircle2 className="h-3 w-3" />
-                          {isRejected ? 'Rechazado' : 'Subido'}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-pink-50 text-pink-500 border border-pink-200">
-                          Pendiente
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2 sm:gap-3">
+                        {docFound ? (
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold ${isDocFailed ? 'bg-red-100 text-red-600' : 'bg-teal-100 text-[#00b8b8]'}`}>
+                            {isDocFailed ? <XCircle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                            {isDocFailed ? 'Observado' : 'Subido'}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-pink-50 text-pink-500 border border-pink-200">
+                            Pendiente
+                          </span>
+                        )}
 
-                      {(!docFound || isRejected || docFound?.status === 'RECHAZADO') && (
-                        <label className="relative flex items-center gap-1.5 px-3 py-1.5 bg-[#00668c] hover:bg-[#005270] text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm">
-                          {isUploadingThis ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-                          <span>{docFound ? 'Reemplazar' : 'Subir'}</span>
-                          <input
-                            type="file"
-                            accept=".pdf"
-                            disabled={isUploadingThis}
-                            onChange={(e) => {
-                              if (e.target.files?.[0]) handleSingleFileUpload(item.key, e.target.files[0]);
+                        {/* BOTÓN 1: RE-EXTRAER DATOS CON GEMINI (SI YA ESTÁ SUBIDO Y FALTAN DATOS) */}
+                        {docFound && isMissingData && (
+                          <button
+                            onClick={handleReprocessDoc}
+                            disabled={isReprocessing}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition-colors shadow-sm disabled:opacity-50"
+                            title="Procesar con IA sin volver a subir"
+                          >
+                            <RefreshCw className={`h-3.5 w-3.5 ${isReprocessing ? 'animate-spin' : ''}`} />
+                            <span>{isReprocessing ? 'Procesando...' : 'Re-extraer Datos'}</span>
+                          </button>
+                        )}
+
+                        {/* BOTÓN 2: REEMPLAZAR DOCUMENTO (SUBIR NUEVO PDF) */}
+                        {shouldShowReplace && (
+                          <button
+                            onClick={() => setReplaceModalState({
+                              isOpen: true,
+                              category: item.key,
+                              categoryName: item.label
+                            })}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#00668c] hover:bg-[#005270] text-white rounded-lg text-xs font-bold transition-colors shadow-sm"
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            <span>{docFound ? 'Reemplazar' : 'Subir'}</span>
+                          </button>
+                        )}
+
+                        {docFound && (
+                          <button
+                            onClick={() => {
+                              setSelectedDocForPreview(docFound);
+                              setIsPreviewOpen(true);
                             }}
-                            className="absolute inset-0 opacity-0 cursor-pointer hidden"
-                          />
-                        </label>
-                      )}
-
-                      {docFound && (
-                        <button
-                          onClick={() => {
-                            setSelectedDocForPreview(docFound);
-                            setIsPreviewOpen(true);
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-[#00668c] hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
-                          title="Previsualizar PDF"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                      )}
+                            className="p-1.5 text-slate-400 hover:text-[#00668c] hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                            title="Previsualizar PDF"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {/* MENSAJE DE OBSERVACIÓN */}
+                    {isDocFailed && verificationRes?.rejectionReason && (
+                      <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-[11px] flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                        <span><strong className="font-semibold">Motivo de rechazo:</strong> {verificationRes.rejectionReason}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -348,6 +432,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
           </div>
         </div>
 
+        {/* SIDEBAR LATERAL CON DATOS Y BOTÓN DE ACCIÓN */}
         <div className="space-y-6">
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
             <button className="w-full py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-2 border border-emerald-200 transition-colors">
@@ -387,10 +472,16 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-50">
                     <span className="text-slate-400 font-medium">Nombres:</span>
-                    <span className="font-bold text-slate-800 text-right">{certData.applicantNames || 'N/A'}</span>
+                    <span className="font-bold text-slate-800 text-right">{certData.applicantNames || 'NO DETECTADO'}</span>
                   </div>
                 </>
               )}
+              <div className="flex justify-between py-1 border-b border-slate-50">
+                <span className="text-slate-400 font-medium">Ubicación:</span>
+                <span className="font-bold text-slate-800 text-right truncate max-w-[180px]">
+                  {certData.department || 'N/A'}, {certData.district || 'N/A'}
+                </span>
+              </div>
               <div className="flex justify-between py-1 border-b border-slate-50">
                 <span className="text-slate-400 font-medium">Email:</span>
                 <span className="font-medium text-slate-700 text-right truncate max-w-[180px]">{certData.applicantEmail}</span>
@@ -398,10 +489,16 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
             </div>
           </div>
 
-          {/* RENDERIZADO CONDICIONAL DEL MODAL DE AUTOCOMPLETADO */}
-          {isIdentityApproved && (
+          {/* BOTÓN REAL QUE ABRE EL MODAL DE CONFIRMACIÓN */}
+          {isIdentityApproved && !isRejected && (
             <div className="pt-2">
-              <CertificateActionsModal certificate={certData} />
+              <button
+                onClick={() => setIsCamerfirmaConfirmOpen(true)}
+                className="w-full py-3 px-4 bg-[#00668c] hover:bg-[#005270] text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center justify-center gap-2"
+              >
+                <Send className="h-4 w-4" />
+                <span>Completar Formulario en Camerfirma</span>
+              </button>
             </div>
           )}
 
@@ -412,7 +509,30 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      {/* Modal Visor PDF */}
+      {/* MODAL 1: CONFIRMACIÓN PREVIA CON CHECKBOX PARA CAMERFIRMA */}
+      <CamerfirmaConfirmationModal
+        isOpen={isCamerfirmaConfirmOpen}
+        certificate={certData}
+        onClose={() => setIsCamerfirmaConfirmOpen(false)}
+        onConfirm={handleExecuteAutofill}
+      />
+
+      {/* MODAL 2: REEMPLAZO ESPECÍFICO DE DOCUMENTOS CON EXTACCIÓN IA */}
+      {replaceModalState.isOpen && (
+        <CertificateActionsModal
+          isOpen={replaceModalState.isOpen}
+          certificateId={certData.id}
+          documentType={replaceModalState.category}
+          documentTypeName={replaceModalState.categoryName}
+          onClose={() => setReplaceModalState({ isOpen: false, category: '', categoryName: '' })}
+          onSuccess={() => {
+            setReplaceModalState({ isOpen: false, category: '', categoryName: '' });
+            fetchCertificateDetail(true);
+          }}
+        />
+      )}
+
+      {/* MODAL 3: VISOR PDF */}
       {isPreviewOpen && selectedDocForPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm font-sans">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden border border-slate-200">

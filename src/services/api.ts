@@ -19,6 +19,25 @@ export interface VerifyDniPayload {
   rucType?: string;
 }
 
+export interface ValidateDocumentsPayload {
+  formData: {
+    ruc?: string;
+    dni?: string;
+    razonSocial?: string;
+    representanteLegal?: string;
+  };
+  extractedData: Array<{
+    documentType: string;
+    fileName: string;
+    extractedFields: {
+      ruc?: string;
+      dni?: string;
+      razonSocial?: string;
+      representanteLegal?: string;
+    };
+  }>;
+}
+
 type SessionExpiredHandler = () => void;
 let onSessionExpiredCallback: SessionExpiredHandler | null = null;
 
@@ -26,7 +45,7 @@ export const setOnSessionExpired = (callback: SessionExpiredHandler) => {
   onSessionExpiredCallback = callback;
 };
 
-// Error personalizado para identificar expiración de sesión sin colgar memoria
+// Error personalizado para identificar expiración de sesión
 export class SessionExpiredError extends Error {
   constructor() {
     super('SESION_EXPIRADA');
@@ -34,7 +53,7 @@ export class SessionExpiredError extends Error {
   }
 }
 
-// 📌 INTERCEPTOR CENTRAL
+// Interceptor central
 async function handleResponse(res: Response) {
   if (res.status === 401) {
     if (onSessionExpiredCallback) {
@@ -51,7 +70,7 @@ async function handleResponse(res: Response) {
   } catch { }
 
   if (!res.ok) {
-    throw new Error(data.error || `Error en la solicitud: ${res.statusText}`);
+    throw new Error(data.error || data.message || `Error en la solicitud: ${res.statusText}`);
   }
 
   return data;
@@ -82,7 +101,6 @@ export const api = {
     const formData = new FormData();
     const isEmpresa = payload.entityType === 'EMPRESA';
 
-    // Apuntar a los endpoints dedicados de verificación
     const endpoint = isEmpresa
       ? `${BACKEND_URL}/api/verify/company`
       : `${BACKEND_URL}/api/verify/dni`;
@@ -109,11 +127,16 @@ export const api = {
 
     const res = await fetch(endpoint, {
       method: 'POST',
-      credentials: 'include', // Envío explícito de cookies de sesión
+      credentials: 'include',
       body: formData,
     });
 
     return handleResponse(res);
+  },
+
+  // Alias para la creación de solicitudes (apunta a verifyDni/company o directo)
+  async createCertificate(payload: VerifyDniPayload) {
+    return this.verifyDni(payload);
   },
 
   // 3. Carga individual
@@ -150,13 +173,20 @@ export const api = {
   },
 
   // 6. Reemplazo
-  async replaceDocument(id: string, file: File) {
-    const formData = new FormData();
-    formData.append('file', file);
+  async replaceDocument(id: string, fileOrFormData: File | FormData, documentType?: string) {
+    let bodyData: FormData;
+
+    if (fileOrFormData instanceof FormData) {
+      bodyData = fileOrFormData;
+    } else {
+      bodyData = new FormData();
+      bodyData.append('file', fileOrFormData);
+      if (documentType) bodyData.append('documentType', documentType);
+    }
 
     const res = await fetch(`${BACKEND_URL}/api/certificates/${id}/replace-document`, {
-      method: 'PUT',
-      body: formData,
+      method: 'POST',
+      body: bodyData,
       credentials: 'include',
     });
     return handleResponse(res);
@@ -178,6 +208,7 @@ export const api = {
       return { ok: false, data: { found: false, message: error.message || 'Error de conexión.' } };
     }
   },
+
   async syncBiocamerClient(certificateId: string) {
     const res = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/sync-biocamer`, {
       method: 'POST',
@@ -186,7 +217,6 @@ export const api = {
     });
     return handleResponse(res);
   },
-  // En frontend/services/api.ts
 
   checkBiocamerStatus: async (id: string) => {
     const response = await fetch(`${BACKEND_URL}/api/certificates/${id}/check-biocamer`, {
@@ -194,24 +224,37 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
     });
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error || 'Error al verificar el estado en BioCamer');
-    }
-    return response.json();
+    return handleResponse(response);
   },
 
   autofillCamerfirma: async (certificateId: string) => {
-  const response = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/autofill-camerfirma`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error || 'Error al autocompletar en Camerfirma');
-  }
-  return response.json();
-},
+    const response = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/autofill-camerfirma`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    return handleResponse(response);
+  },
 
+  // 8. Validación Previa
+  async validateDocuments(payload: ValidateDocumentsPayload) {
+    const res = await fetch(`${BACKEND_URL}/api/certificates/validate-documents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    return handleResponse(res);
+  },
+  // 9. Re-procesar OCR con Gemini (sin volver a subir archivo)
+  async reprocessCertificate(id: string) {
+    const res = await fetch(`${BACKEND_URL}/api/certificates/${id}/reprocess`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    return handleResponse(res);
+  },
 };
+
+export default api;
