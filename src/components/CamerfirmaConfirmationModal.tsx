@@ -1,8 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, ExternalLink, Send, CheckSquare, Square, ShieldCheck, Loader2 } from 'lucide-react';
-import { injectCamerfirmaData } from '@/lib/camerfirma-injector';
+import { X, Send, CheckSquare, Square, ShieldCheck, Loader2 } from 'lucide-react';
 
 interface CamerfirmaConfirmationModalProps {
   isOpen: boolean;
@@ -22,19 +21,14 @@ export default function CamerfirmaConfirmationModal({
 
   if (!isOpen || !certificate) return null;
 
-  const isEmpresa = certificate.entityType === 'EMPRESA';
-  const camerfirmaUrl = isEmpresa
-    ? 'https://secure.camerfirma.com/solicitudes_status/solicitud_1.php?codpro=1D1AGUUN&num_perfil=13080'
-    : 'https://secure.camerfirma.com/solicitudes_status/solicitud_1.php?codpro=PXBEOYHS&num_perfil=13040';
-
   const handleOpenAndAutofill = async () => {
     setIsProcessing(true);
     try {
-      // 🎯 Llama al endpoint del backend que dispara Puppeteer
+      // 🎯 Llama al backend (Puppeteer procesa todo silenciosamente de fondo)
       await onConfirm(); 
       onClose();
     } catch (err: any) {
-      alert(`Error al ejecutar Puppeteer: ${err.message}`);
+      alert(`Error al ejecutar la automatización: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -49,7 +43,7 @@ export default function CamerfirmaConfirmationModal({
               <ShieldCheck className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-sm font-bold tracking-tight">Confirmar Autocompletado en Camerfirma</h2>
+              <h2 className="text-sm font-bold tracking-tight">Confirmar Envío a Camerfirma</h2>
               <p className="text-[11px] text-slate-400">Expediente: {certificate.code || certificate.id}</p>
             </div>
           </div>
@@ -60,7 +54,7 @@ export default function CamerfirmaConfirmationModal({
 
         <div className="p-6 space-y-4 text-xs text-slate-600">
           <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-            <span className="font-bold text-slate-800 block text-xs">Resumen de datos a inyectar:</span>
+            <span className="font-bold text-slate-800 block text-xs">Resumen de datos a procesar:</span>
             <div className="grid grid-cols-2 gap-2 text-[11px]">
               <div><strong className="text-slate-500">Titular:</strong> {certificate.applicantNames} {certificate.applicantSurname1}</div>
               <div><strong className="text-slate-500">DNI:</strong> {certificate.applicantDocNum}</div>
@@ -78,7 +72,7 @@ export default function CamerfirmaConfirmationModal({
               {isChecked ? <CheckSquare className="h-5 w-5 text-[#00668c]" /> : <Square className="h-5 w-5 text-slate-400" />}
             </button>
             <span className="text-[11px] font-medium text-slate-700 leading-tight">
-              Confirmo que los datos extraídos son correctos y autorizo la apertura del portal de Camerfirma para rellenar la solicitud.
+              Confirmo que los datos extraídos son correctos y autorizo la autogestión de la presolicitud en Camerfirma.
             </span>
           </label>
         </div>
@@ -102,8 +96,8 @@ export default function CamerfirmaConfirmationModal({
               </>
             ) : (
               <>
-                <ExternalLink className="h-4 w-4" />
-                <span>Abrir Portal y Rellenar</span>
+                <Send className="h-4 w-4" />
+                <span>Procesar en Segundo Plano</span>
               </>
             )}
           </button>

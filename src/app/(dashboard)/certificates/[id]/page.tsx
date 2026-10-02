@@ -7,7 +7,7 @@ import CertificateActionsModal from '@/components/CertificateActionsModal';
 import CamerfirmaConfirmationModal from '@/components/CamerfirmaConfirmationModal';
 import {
   FileText, Eye, RefreshCw, MessageSquare,
-  CheckCircle2, ShieldCheck, X, ExternalLink, ArrowLeft, User, AlertTriangle, Loader2, Upload, Building2, UserPlus, XCircle, Send
+  CheckCircle2, ShieldCheck, X, ExternalLink, ArrowLeft, User, AlertTriangle, Loader2, Upload, Building2, UserPlus, XCircle, Send, Mail
 } from 'lucide-react';
 
 export default function CertificateDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -20,6 +20,10 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const [isSyncingBiocamer, setIsSyncingBiocamer] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [isReprocessing, setIsReprocessing] = useState(false);
+
+  // 🎯 ESTADO PARA LA VERIFICACIÓN DE CORREOS DE CAMERFIRMA
+  const [isSyncingEmails, setIsSyncingEmails] = useState(false);
+  const [emailSyncResult, setEmailSyncResult] = useState<any>(null);
 
   // Modal de confirmación con checkbox para Camerfirma
   const [isCamerfirmaConfirmOpen, setIsCamerfirmaConfirmOpen] = useState(false);
@@ -88,6 +92,26 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     };
   }, [isIdentityRegistered, isIdentityApproved, certData?.id]);
 
+  // 🎯 FUNCIÓN DE SINCRONIZACIÓN Y AUTO-ACEPTACIÓN DE CORREOS EN EL FRONTEND
+  const handleCheckEmails = async () => {
+    setIsSyncingEmails(true);
+    try {
+      const data = await api.checkEmails(certData.id);
+
+      if (data.success) {
+        setEmailSyncResult(data.result);
+        alert(`✓ Se procesaron ${data.result.processed || 0} mensajes de Camerfirma.`);
+        await fetchCertificateDetail(true);
+      } else {
+        alert(`Error al procesar correos: ${data.error || 'Fallo desconocido'}`);
+      }
+    } catch (err: any) {
+      alert(`Error de red: ${err.message || 'No se pudo consultar el buzón.'}`);
+    } finally {
+      setIsSyncingEmails(false);
+    }
+  };
+
   const handleRegisterInBiocamer = async () => {
     setIsSyncingBiocamer(true);
     try {
@@ -123,14 +147,10 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     }
   };
 
-  // 🎯 LÓGICA DE RE-PROCESAMIENTO DIRECTO USANDO EL CLIENTE API CENTRALIZADO
   const handleReprocessDoc = async () => {
     setIsReprocessing(true);
     try {
-      // ❌ Antes: const data = await api.reprocessCertificateDoc(certData.id);
-      // ✅ Ahora: Usa el nombre exacto registrado en api.ts
       const data = await api.reprocessCertificate(certData.id);
-
       if (data.success) {
         alert('✓ ¡Datos del titular y ubicación re-extraídos exitosamente con Gemini AI!');
         await fetchCertificateDetail(true);
@@ -144,16 +164,22 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     }
   };
 
-  // Función ejecutada tras la confirmación del modal con checkbox para Camerfirma
   const handleExecuteAutofill = async () => {
-    try {
-      const response = await api.autofillCamerfirma(certData.id);
-      alert(response.message || '✓ Formulario autocompletado y PDF adjuntado exitosamente en Camerfirma.');
-      await fetchCertificateDetail(true);
-    } catch (err: any) {
-      throw new Error(err.message || 'Fallo en el servidor al intentar autocompletar el formulario.');
-    }
-  };
+  try {
+    const response = await api.autofillCamerfirma(certData.id);
+    
+    // 🎯 Mantiene al usuario dentro de Hyperion en la misma vista de detalle
+    alert('✓ La solicitud ha sido registrada exitosamente en Camerfirma en segundo plano.');
+    
+    // Cerramos el modal de confirmación
+    setIsCamerfirmaConfirmOpen(false);
+    
+    // Actualizamos el estado del certificado local
+    await fetchCertificateDetail(true);
+  } catch (err: any) {
+    alert(`Error: ${err.message || 'Fallo al procesar en Camerfirma.'}`);
+  }
+};
 
   if (isLoading) {
     return (
@@ -183,6 +209,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const isRejected = certData.status === 'RECHAZADO';
 
   const documentsList = certData.documents || [];
+  const emailLogsList = certData.emailLogs || [];
   const backendBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
 
   const requiredDocTypes = isCompany
@@ -206,8 +233,11 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   const isMissingData = !certData.applicantNames || certData.applicantNames === 'NO DETECTADO' || !certData.department;
   const headerTitle = isCompany ? (certData.companyName || 'Empresa Sin Razón Social') : (isMissingData ? 'NO DETECTADO' : applicantFullName);
 
-  const activeDocUrl = selectedDocForPreview?.fileUrl
-    ? (selectedDocForPreview.fileUrl.startsWith('http') ? selectedDocForPreview.fileUrl : `${backendBaseUrl}${selectedDocForPreview.fileUrl}`)
+  // 🎯 RUTA DEL DOCUMENTO CON BUSTER ANTI-CACHÉ
+  const rawUrl = selectedDocForPreview?.fileUrl || '';
+  const formattedUrl = rawUrl.startsWith('http') ? rawUrl : `${backendBaseUrl}${rawUrl}`;
+  const activeDocUrl = formattedUrl 
+    ? `${formattedUrl}${formattedUrl.includes('?') ? '&' : '?'}cache_buster=${Date.now()}`
     : '';
 
   const failedDocsReasons = documentsList
@@ -295,7 +325,6 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                 const verificationRes = docFound?.verificationResult;
                 const isDocFailed = verificationRes && (!verificationRes.isMatch || verificationRes.rejectionReason);
 
-                // Habilita el botón de reemplazar si no hay doc, está fallido o no se leyeron los datos
                 const shouldShowReplace = !docFound || isDocFailed || isRejected || isMissingData;
 
                 return (
@@ -323,7 +352,6 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                           </span>
                         )}
 
-                        {/* BOTÓN 1: RE-EXTRAER DATOS CON GEMINI (SI YA ESTÁ SUBIDO Y FALTAN DATOS) */}
                         {docFound && isMissingData && (
                           <button
                             onClick={handleReprocessDoc}
@@ -336,7 +364,6 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                           </button>
                         )}
 
-                        {/* BOTÓN 2: REEMPLAZAR DOCUMENTO (SUBIR NUEVO PDF) */}
                         {shouldShowReplace && (
                           <button
                             onClick={() => setReplaceModalState({
@@ -366,7 +393,6 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                       </div>
                     </div>
 
-                    {/* MENSAJE DE OBSERVACIÓN */}
                     {isDocFailed && verificationRes?.rejectionReason && (
                       <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-red-700 text-[11px] flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
@@ -430,6 +456,61 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
               </div>
             </div>
           </div>
+
+          {/* 🎯 SECCIÓN DE MONITOREO DE CORREOS Y AUTO-ACEPTACIÓN DE ENLACES */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-5 space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <Mail className="h-5 w-5 text-[#00668c]" />
+                <div>
+                  <h2 className="font-bold text-slate-800 text-sm">Monitoreo de Correos de Camerfirma</h2>
+                  <p className="text-[11px] text-slate-400">Captura de alias temporal y auto-aceptación de enlaces</p>
+                </div>
+              </div>
+              <button
+                onClick={handleCheckEmails}
+                disabled={isSyncingEmails}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#00668c] hover:bg-[#005270] text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50 shadow-sm"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isSyncingEmails ? 'animate-spin' : ''}`} />
+                <span>{isSyncingEmails ? 'Procesando...' : 'Sincronizar Correos'}</span>
+              </button>
+            </div>
+
+            {/* HISTORIAL DE LOGS DE CORREO */}
+            <div className="space-y-2">
+              {emailLogsList.length === 0 ? (
+                <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center text-xs text-slate-400">
+                  Aún no se han capturado correos entrantes para este expediente. Haga clic en "Sincronizar Correos" tras enviar la solicitud a Camerfirma.
+                </div>
+              ) : (
+                emailLogsList.map((log: any) => (
+                  <div key={log.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-3">
+                      <span className="w-6 h-6 rounded-full bg-blue-100 text-[#00668c] font-bold flex items-center justify-center text-[10px]">
+                        #{log.emailSequenceNumber}
+                      </span>
+                      <div>
+                        <p className="font-bold text-slate-800">{log.subject}</p>
+                        <p className="text-[10px] text-slate-400">De: {log.fromEmail}</p>
+                      </div>
+                    </div>
+                    <div>
+                      {log.isFinalForwarded ? (
+                        <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold text-[10px] rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3" /> Reenviado al Cliente
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold text-[10px] rounded-full">
+                          Auto-Aceptado
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
 
         {/* SIDEBAR LATERAL CON DATOS Y BOTÓN DE ACCIÓN */}
@@ -474,6 +555,14 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                     <span className="text-slate-400 font-medium">Nombres:</span>
                     <span className="font-bold text-slate-800 text-right">{certData.applicantNames || 'NO DETECTADO'}</span>
                   </div>
+                  {certData.documents?.[0]?.verificationResult?.extractedExpiryDate && (
+                    <div className="flex justify-between py-1 border-b border-slate-50">
+                      <span className="text-slate-400 font-medium">Fecha Caducidad:</span>
+                      <span className="font-bold text-slate-800">
+                        {certData.documents[0].verificationResult.extractedExpiryDate}
+                      </span>
+                    </div>
+                  )}
                 </>
               )}
               <div className="flex justify-between py-1 border-b border-slate-50">

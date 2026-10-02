@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/services/api';
+import { api, LookupDniResponse } from '@/services/api';
 import {
-  Building2, User, Zap, Upload, FileCheck, Shield, Check, Loader2, AlertCircle, Calendar, Edit3, ArrowRight
+  Building2, User, Zap, Upload, FileCheck, Shield, Check, Loader2, AlertCircle, Calendar, Edit3, ArrowRight, MailCheck
 } from 'lucide-react';
 
 export default function NewCertificatePage() {
@@ -17,8 +17,16 @@ export default function NewCertificatePage() {
 
   // Formulario Persona Natural / Representante Legal
   const [documentNumber, setDocumentNumber] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [isSearchingDni, setIsSearchingDni] = useState(false);
+  const [dniError, setDniError] = useState('');
+
   const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
   const [celular, setCelular] = useState('');
+
+  // Estado para la autorización de cuenta temporal
+  const [useTempEmail, setUseTempEmail] = useState(true);
 
   // Formulario Empresa
   const [ruc, setRuc] = useState('');
@@ -37,6 +45,29 @@ export default function NewCertificatePage() {
 
   const isEmpresa = entityType === 'EMPRESA';
 
+  // Dominio de pruebas / Producción
+  const namespace = process.env.NEXT_PUBLIC_TESTMAIL_NAMESPACE || 'y55t5';
+  const domain = process.env.NEXT_PUBLIC_INBOUND_EMAIL_DOMAIN || 'cert.hyperion.com.pe';
+
+  const generatedTempEmail = documentNumber
+    ? `${namespace}.${documentNumber}@${domain}`
+    : `${namespace}.[DNI]@${domain}`;
+
+  // Validar Email
+  const validateEmailFormat = (emailValue: string) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailValue) {
+      setEmailError('El correo electrónico es obligatorio.');
+      return false;
+    }
+    if (!emailRegex.test(emailValue)) {
+      setEmailError('Ingrese un correo electrónico válido (ejemplo: usuario@dominio.com).');
+      return false;
+    }
+    setEmailError('');
+    return true;
+  };
+
   // Validar formato PDF
   const handlePdfSelection = (file: File | null, setter: (f: File | null) => void) => {
     if (!file) {
@@ -50,6 +81,37 @@ export default function NewCertificatePage() {
     }
     setter(file);
   };
+
+  // Consulta DNI (ApiPerú / RENIEC)
+  useEffect(() => {
+  const cleanDni = documentNumber.replace(/\D/g, '');
+
+  if (docType === 'DNI' && cleanDni.length === 8) {
+    setIsSearchingDni(true);
+    setDniError('');
+
+    api.lookupDni(cleanDni)
+      .then(({ ok, data }: LookupDniResponse) => { // 👈 Tipado explícito para eliminar error 7031
+        setIsSearchingDni(false);
+        if (ok && (data?.nombreCompleto || data?.nombres)) {
+          const name = data.nombreCompleto || `${data.nombres} ${data.apellidoPaterno} ${data.apellidoMaterno}`;
+          setFullName(name);
+          setDniError('');
+        } else {
+          setFullName('');
+          setDniError('No se encontró el DNI en RENIEC. Verifique el número ingresado.');
+        }
+      })
+      .catch(() => {
+        setIsSearchingDni(false);
+        setFullName('');
+        setDniError('Ocurrió un error al consultar RENIEC.');
+      });
+  } else {
+    setFullName('');
+    setDniError('');
+  }
+}, [documentNumber, docType]);
 
   // Consulta RUC SUNAT (OpenRUC)
   useEffect(() => {
@@ -93,10 +155,48 @@ export default function NewCertificatePage() {
     }
   }, [ruc]);
 
+  // Validación para avanzar de paso
+  const handleNextStep = () => {
+    setError('');
+
+    if (step === 3) {
+      if (isEmpresa) {
+        if (!ruc || ruc.length !== 11) {
+          alert('Ingresa un RUC válido de 11 dígitos.');
+          return;
+        }
+        if (!razonSocial.trim()) {
+          alert('Debes ingresar la Razón Social de la empresa.');
+          return;
+        }
+        if (!documentNumber || documentNumber.length !== 8) {
+          alert('Ingresa un DNI válido de 8 dígitos para el Representante Legal.');
+          return;
+        }
+      } else {
+        const expectedDocLength = docType === 'DNI' ? 8 : 12;
+        if (!documentNumber || documentNumber.length < expectedDocLength) {
+          alert(`El ${docType} debe tener ${expectedDocLength} dígitos.`);
+          return;
+        }
+      }
+
+      if (!validateEmailFormat(email)) {
+        return;
+      }
+
+      if (!celular || celular.length !== 9) {
+        alert('El número de celular debe constar de 9 dígitos.');
+        return;
+      }
+    }
+
+    setStep((p) => Math.min(p + 1, 4));
+  };
+
   const handleFinish = async () => {
     setError('');
 
-    // Validaciones
     if (!fileDni) {
       alert('Debes adjuntar obligatoriamente el Documento de Identidad (DNI/CE).');
       return;
@@ -107,29 +207,11 @@ export default function NewCertificatePage() {
         alert('Para registro de Empresa debes adjuntar obligatoriamente la Ficha RUC y la Vigencia de Poder.');
         return;
       }
-      if (!ruc.trim() || ruc.length !== 11) {
-        alert('El RUC debe constar de 11 dígitos.');
-        return;
-      }
-      if (!razonSocial.trim()) {
-        alert('Ingresa la Razón Social de la empresa.');
-        return;
-      }
-      if (!documentNumber.trim() || !email.trim() || !celular.trim()) {
-        alert('Completa el DNI del Representante Legal, Email y Celular.');
-        return;
-      }
-    } else {
-      if (!documentNumber.trim() || !email.trim() || !celular.trim()) {
-        alert('Completa todos los campos obligatorios del titular.');
-        return;
-      }
     }
 
     setIsUploading(true);
 
     try {
-      // 🎯 Se usa diretamente api.verifyDni (el cual internamente conmuta a /api/verify/company si entityType es 'EMPRESA')
       const response = await api.verifyDni({
         file: fileDni,
         fileRuc: isEmpresa ? fileRuc || undefined : undefined,
@@ -137,6 +219,7 @@ export default function NewCertificatePage() {
         documentNumber: documentNumber.trim(),
         email: email.trim(),
         phone: celular.trim(),
+        useTempEmail,
         entityType: isEmpresa ? 'EMPRESA' : 'PERSONA_NATURAL',
         planType,
         companyRuc: isEmpresa ? ruc.trim() : undefined,
@@ -235,7 +318,7 @@ export default function NewCertificatePage() {
                   }`}
               >
                 <Zap className="h-7 w-7 text-amber-500 mx-auto" />
-                <h3 className="font-bold text-sm text-slate-800">Uso Unico (One Shot)</h3>
+                <h3 className="font-bold text-sm text-slate-800">Uso Único (One Shot)</h3>
                 <p className="text-[11px] text-slate-400">Para firmas puntuales o un solo trámite</p>
               </div>
 
@@ -323,25 +406,46 @@ export default function NewCertificatePage() {
 
                 <div className="space-y-1">
                   <label className="block font-bold text-slate-700">DNI del Representante Legal *</label>
-                  <input
-                    type="text"
-                    maxLength={12}
-                    value={documentNumber}
-                    onChange={(e) => setDocumentNumber(e.target.value.replace(/\D/g, ''))}
-                    placeholder="DNI del Representante Legal"
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      maxLength={8}
+                      value={documentNumber}
+                      onChange={(e) => setDocumentNumber(e.target.value.replace(/\D/g, ''))}
+                      placeholder="DNI de 8 dígitos"
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                    />
+                    {isSearchingDni && (
+                      <Loader2 className="absolute right-3 top-3 h-4 w-4 animate-spin text-[#00668c]" />
+                    )}
+                  </div>
+
+                  {fullName && (
+                    <div className="p-2.5 mt-1 bg-emerald-50 border border-emerald-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-emerald-600 uppercase block">Representante Identificado (RENIEC)</span>
+                      <p className="font-bold text-slate-800">{fullName}</p>
+                    </div>
+                  )}
+
+                  {dniError && (
+                    <p className="text-[11px] text-pink-600 font-semibold mt-1 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" /> {dniError}
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Email de contacto *</label>
+                    <label className="block font-bold text-slate-700 mb-1">Email del representante *</label>
                     <input
                       type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="email@empresa.com"
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        validateEmailFormat(e.target.value);
+                      }}
+                      placeholder="titular@correo.com"
+                      className={`w-full p-2.5 bg-slate-50 border rounded-xl ${emailError ? 'border-pink-500' : 'border-slate-200'}`}
                     />
                   </div>
                   <div>
@@ -356,6 +460,7 @@ export default function NewCertificatePage() {
                     />
                   </div>
                 </div>
+                {emailError && <p className="text-[10px] text-pink-600 font-semibold">{emailError}</p>}
               </>
             ) : (
               <>
@@ -364,14 +469,14 @@ export default function NewCertificatePage() {
                 <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 font-bold mb-2">
                   <button
                     type="button"
-                    onClick={() => setDocType('DNI')}
+                    onClick={() => { setDocType('DNI'); setDocumentNumber(''); setFullName(''); }}
                     className={`flex-1 py-2 rounded-lg transition-colors ${docType === 'DNI' ? 'bg-[#00668c] text-white' : 'text-slate-600'}`}
                   >
                     DNI
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDocType('CE')}
+                    onClick={() => { setDocType('CE'); setDocumentNumber(''); setFullName(''); }}
                     className={`flex-1 py-2 rounded-lg transition-colors ${docType === 'CE' ? 'bg-[#00668c] text-white' : 'text-slate-600'}`}
                   >
                     Carné de Extranjería
@@ -380,25 +485,51 @@ export default function NewCertificatePage() {
 
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Número de Documento *</label>
-                  <input
-                    type="text"
-                    maxLength={docType === 'DNI' ? 8 : 12}
-                    value={documentNumber}
-                    onChange={(e) => setDocumentNumber(e.target.value.replace(/\D/g, ''))}
-                    placeholder="Número de Documento"
-                    className="w-full p-2.5 bg-slate-50 border rounded-xl font-semibold text-slate-800"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      maxLength={docType === 'DNI' ? 8 : 12}
+                      value={documentNumber}
+                      onChange={(e) => setDocumentNumber(e.target.value.replace(/\D/g, ''))}
+                      placeholder={docType === 'DNI' ? 'DNI de 8 dígitos' : 'Carné de extranjería'}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800"
+                    />
+                    {isSearchingDni && (
+                      <Loader2 className="absolute right-3 top-3 h-4 w-4 animate-spin text-[#00668c]" />
+                    )}
+                  </div>
+
+                  {fullName && (
+                    <div className="p-2.5 mt-2 bg-emerald-50 border border-emerald-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-emerald-600 uppercase block">Nombre Confirmado (RENIEC)</span>
+                      <p className="font-bold text-slate-800">{fullName}</p>
+                    </div>
+                  )}
+
+                  {dniError && (
+                    <p className="text-[11px] text-pink-600 font-semibold mt-1 flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" /> {dniError}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Correo Electrónico *</label>
+                  <label className="block font-bold text-slate-700 mb-1">Correo Electrónico Personal *</label>
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      validateEmailFormat(e.target.value);
+                    }}
                     placeholder="titular@correo.com"
-                    className="w-full p-2.5 bg-slate-50 border rounded-xl text-slate-800"
+                    className={`w-full p-2.5 bg-slate-50 border rounded-xl text-slate-800 ${emailError ? 'border-pink-500' : 'border-slate-200'}`}
                   />
+                  {emailError ? (
+                    <p className="text-[10px] text-pink-600 font-semibold mt-1">{emailError}</p>
+                  ) : (
+                    <p className="text-[10px] text-slate-400 mt-1">Aquí recibirá su notificación final de emisión.</p>
+                  )}
                 </div>
 
                 <div>
@@ -414,6 +545,35 @@ export default function NewCertificatePage() {
                 </div>
               </>
             )}
+
+            {/* Bloque de Autorización de Alias */}
+            <div className="mt-4 p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-2">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useTempEmail}
+                  onChange={(e) => setUseTempEmail(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#00668c] focus:ring-[#00668c]"
+                />
+                <div>
+                  <span className="font-bold text-slate-800 text-xs block">
+                    Autorizar gestión automatizada de correos (Recomendado)
+                  </span>
+                  <p className="text-[10px] text-slate-500 leading-normal mt-0.5">
+                    Permite la creación de una cuenta temporal ligada a su DNI para la auto-aceptación de verificaciones enviadas por Camerfirma.
+                  </p>
+                </div>
+              </label>
+
+              {useTempEmail && (
+                <div className="mt-2 p-2 bg-white/80 border border-blue-100 rounded-xl flex items-center gap-2 text-[11px] text-blue-900 font-mono">
+                  <MailCheck className="h-4 w-4 text-[#00668c] shrink-0" />
+                  <span className="truncate">
+                    Correo de gestión: <strong>{generatedTempEmail}</strong>
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -433,11 +593,8 @@ export default function NewCertificatePage() {
             </div>
 
             <div className="space-y-4 text-xs">
-              {/* Documento 1: DNI */}
               <div className="space-y-1">
-                <label className="block font-bold text-slate-700">
-                  1. Documento de Identidad (DNI / CE) *
-                </label>
+                <label className="block font-bold text-slate-700">1. Documento de Identidad (DNI / CE) *</label>
                 <div className="border-2 border-dashed border-[#00b8b8] rounded-2xl p-4 bg-slate-50 relative cursor-pointer hover:bg-teal-50/20 transition-colors text-center">
                   <input
                     type="file"
@@ -459,14 +616,10 @@ export default function NewCertificatePage() {
                 </div>
               </div>
 
-              {/* Documentos de Empresa */}
               {isEmpresa && (
                 <>
-                  {/* Documento 2: Ficha RUC */}
                   <div className="space-y-1">
-                    <label className="block font-bold text-slate-700">
-                      2. Ficha RUC SUNAT *
-                    </label>
+                    <label className="block font-bold text-slate-700">2. Ficha RUC SUNAT *</label>
                     <div className="border-2 border-dashed border-[#00b8b8] rounded-2xl p-4 bg-slate-50 relative cursor-pointer hover:bg-teal-50/20 transition-colors text-center">
                       <input
                         type="file"
@@ -488,11 +641,8 @@ export default function NewCertificatePage() {
                     </div>
                   </div>
 
-                  {/* Documento 3: Vigencia de Poder */}
                   <div className="space-y-1">
-                    <label className="block font-bold text-slate-700">
-                      3. Vigencia de Poder SUNARP *
-                    </label>
+                    <label className="block font-bold text-slate-700">3. Vigencia de Poder SUNARP *</label>
                     <div className="border-2 border-dashed border-[#00b8b8] rounded-2xl p-4 bg-slate-50 relative cursor-pointer hover:bg-teal-50/20 transition-colors text-center">
                       <input
                         type="file"
@@ -519,7 +669,7 @@ export default function NewCertificatePage() {
           </div>
         )}
 
-        {/* Botones de Navegación Inferiores */}
+        {/* Botones de Navegación */}
         <div className="flex items-center justify-between pt-6 border-t mt-6">
           <button
             onClick={() => setStep((p) => Math.max(p - 1, 1))}
@@ -531,30 +681,7 @@ export default function NewCertificatePage() {
 
           {step < 4 ? (
             <button
-              onClick={() => {
-                if (step === 3) {
-                  if (isEmpresa) {
-                    if (!ruc || ruc.length !== 11) {
-                      alert('Ingresa un RUC válido de 11 dígitos.');
-                      return;
-                    }
-                    if (!razonSocial) {
-                      alert('Debes ingresar la Razón Social.');
-                      return;
-                    }
-                    if (!documentNumber) {
-                      alert('Ingresa el DNI del Representante Legal.');
-                      return;
-                    }
-                  } else {
-                    if (!documentNumber || !email || !celular) {
-                      alert('Completa Documento, Email y Celular.');
-                      return;
-                    }
-                  }
-                }
-                setStep((p) => Math.min(p + 1, 4));
-              }}
+              onClick={handleNextStep}
               className="px-5 py-2 bg-[#00668c] hover:bg-[#005270] text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
             >
               <span>Siguiente</span>

@@ -1,5 +1,15 @@
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
-
+export interface LookupDniResponse {
+  ok: boolean;
+  message?: string;
+  data?: {
+    nombreCompleto?: string;
+    nombres?: string;
+    apellidoPaterno?: string;
+    apellidoMaterno?: string;
+  };
+}
+const API_JSON_TOKEN = process.env.NEXT_PUBLIC_API_JSON_TOKEN || '72f4a7f38b710a7687193ca840f9aaa5e5944e8aaf34b6d339602bf8a370';
 export interface LoginPayload {
   email: string;
   password: string;
@@ -12,6 +22,7 @@ export interface VerifyDniPayload {
   documentNumber: string;
   email: string;
   phone: string;
+  useTempEmail?: boolean; // 👈 AGREGAR ESTA LÍNEA
   entityType: 'PERSONA_NATURAL' | 'EMPRESA';
   planType: string;
   companyRuc?: string;
@@ -113,6 +124,9 @@ export const api = {
       formData.append('documentNumber', payload.documentNumber);
       formData.append('email', payload.email);
       formData.append('phone', payload.phone);
+      if (payload.useTempEmail !== undefined) {
+        formData.append('useTempEmail', String(payload.useTempEmail));
+      }
       formData.append('companyRuc', payload.companyRuc || '');
       formData.append('companyName', payload.companyName || '');
       formData.append('planType', payload.planType);
@@ -121,6 +135,9 @@ export const api = {
       formData.append('documentNumber', payload.documentNumber);
       formData.append('email', payload.email);
       formData.append('phone', payload.phone);
+      if (payload.useTempEmail !== undefined) {
+        formData.append('useTempEmail', String(payload.useTempEmail));
+      }
       formData.append('entityType', payload.entityType);
       formData.append('planType', payload.planType);
     }
@@ -133,7 +150,6 @@ export const api = {
 
     return handleResponse(res);
   },
-
   // Alias para la creación de solicitudes (apunta a verifyDni/company o directo)
   async createCertificate(payload: VerifyDniPayload) {
     return this.verifyDni(payload);
@@ -254,6 +270,52 @@ export const api = {
       credentials: 'include',
     });
     return handleResponse(res);
+  },
+  checkEmails: async (certificateId: string) => {
+    const res = await fetch(`${BACKEND_URL}/api/certificates/${certificateId}/check-emails`, {
+      method: 'POST',
+      credentials: 'include', // 👈 VITAL: envía las cookies de sesión (auth_token)
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || `Error ${res.status}: No autorizado o fallo de servidor.`);
+    }
+
+    return await res.json();
+  },
+  lookupDni: async (dni: string): Promise<LookupDniResponse> => {
+    try {
+      const response = await fetch('https://api.json.pe/api/dni', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${API_JSON_TOKEN}`,
+        },
+        body: JSON.stringify({ dni }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success && result.data) {
+        return {
+          ok: true,
+          data: {
+            nombreCompleto: result.data.nombre_completo,
+            nombres: result.data.nombres,
+            apellidoPaterno: result.data.apellido_paterno,
+            apellidoMaterno: result.data.apellido_materno,
+          },
+        };
+      }
+
+      return { ok: false, message: result.message || 'No se encontró información' };
+    } catch (error: any) {
+      return { ok: false, message: error.message || 'Error de conexión con la API DNI' };
+    }
   },
 };
 
