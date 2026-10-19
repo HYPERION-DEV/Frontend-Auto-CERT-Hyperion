@@ -93,20 +93,24 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   }, [isIdentityRegistered, isIdentityApproved, certData?.id]);
 
   // 🎯 FUNCIÓN DE SINCRONIZACIÓN Y AUTO-ACEPTACIÓN DE CORREOS EN EL FRONTEND
+  // 🎯 FUNCIÓN DE SINCRONIZACIÓN Y AUTO-ACEPTACIÓN DE CORREOS EN EL FRONTEND
+  // 🎯 SINCRONIZACIÓN SILENCIOSA DE CORREOS
   const handleCheckEmails = async () => {
     setIsSyncingEmails(true);
     try {
       const data = await api.checkEmails(certData.id);
 
       if (data.success) {
-        setEmailSyncResult(data.result);
-        alert(`✓ Se procesaron ${data.result.processed || 0} mensajes de Camerfirma.`);
-        await fetchCertificateDetail(true);
-      } else {
-        alert(`Error al procesar correos: ${data.error || 'Fallo desconocido'}`);
+        // Actualizamos el estado del expediente con la respuesta que trae los nuevos logs
+        if (data.certificateRequest) {
+          setCertData(data.certificateRequest);
+        } else {
+          // Si no vino en data.certificateRequest, refrescamos silenciosamente
+          await fetchCertificateDetail(true);
+        }
       }
     } catch (err: any) {
-      alert(`Error de red: ${err.message || 'No se pudo consultar el buzón.'}`);
+      console.error('Error al sincronizar correos:', err);
     } finally {
       setIsSyncingEmails(false);
     }
@@ -165,21 +169,21 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   };
 
   const handleExecuteAutofill = async () => {
-  try {
-    const response = await api.autofillCamerfirma(certData.id);
-    
-    // 🎯 Mantiene al usuario dentro de Hyperion en la misma vista de detalle
-    alert('✓ La solicitud ha sido registrada exitosamente en Camerfirma en segundo plano.');
-    
-    // Cerramos el modal de confirmación
-    setIsCamerfirmaConfirmOpen(false);
-    
-    // Actualizamos el estado del certificado local
-    await fetchCertificateDetail(true);
-  } catch (err: any) {
-    alert(`Error: ${err.message || 'Fallo al procesar en Camerfirma.'}`);
-  }
-};
+    try {
+      const response = await api.autofillCamerfirma(certData.id);
+
+      // 🎯 Mantiene al usuario dentro de Hyperion en la misma vista de detalle
+      alert('✓ La solicitud ha sido registrada exitosamente en Camerfirma en segundo plano.');
+
+      // Cerramos el modal de confirmación
+      setIsCamerfirmaConfirmOpen(false);
+
+      // Actualizamos el estado del certificado local
+      await fetchCertificateDetail(true);
+    } catch (err: any) {
+      alert(`Error: ${err.message || 'Fallo al procesar en Camerfirma.'}`);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -204,12 +208,24 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     );
   }
 
+  // Función helper para forzar que los enlaces HTML abran en ventana nueva con su URL directa
+  function formatBodyHtmlWithTarget(html: string): string {
+    if (!html) return '';
+    return html.replace(/<a\b([^>]*)/gi, (match, p1) => {
+      if (!p1.includes('target=')) {
+        return `<a target="_blank" rel="noopener noreferrer" ${p1}`;
+      }
+      return match;
+    });
+  }
+
   const isCompany = certData.entityType === 'EMPRESA';
   const certId = certData.code || certData.id;
   const isRejected = certData.status === 'RECHAZADO';
 
   const documentsList = certData.documents || [];
-  const emailLogsList = certData.emailLogs || [];
+  // 🎯 Soporte dual para emailLogs / logs provenientes del backend
+  const emailLogsList = certData.emailLogs || certData.logs || [];
   const backendBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
 
   const requiredDocTypes = isCompany
@@ -236,7 +252,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   // 🎯 RUTA DEL DOCUMENTO CON BUSTER ANTI-CACHÉ
   const rawUrl = selectedDocForPreview?.fileUrl || '';
   const formattedUrl = rawUrl.startsWith('http') ? rawUrl : `${backendBaseUrl}${rawUrl}`;
-  const activeDocUrl = formattedUrl 
+  const activeDocUrl = formattedUrl
     ? `${formattedUrl}${formattedUrl.includes('?') ? '&' : '?'}cache_buster=${Date.now()}`
     : '';
 
@@ -458,13 +474,14 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
           </div>
 
           {/* 🎯 SECCIÓN DE MONITOREO DE CORREOS Y AUTO-ACEPTACIÓN DE ENLACES */}
+          {/* SECCIÓN DE MONITOREO DE CORREOS DE CAMERFIRMA */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-5 space-y-4">
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center gap-2">
                 <Mail className="h-5 w-5 text-[#00668c]" />
                 <div>
                   <h2 className="font-bold text-slate-800 text-sm">Monitoreo de Correos de Camerfirma</h2>
-                  <p className="text-[11px] text-slate-400">Captura de alias temporal y auto-aceptación de enlaces</p>
+                  <p className="text-[11px] text-slate-400">Captura automática y notificación de validación</p>
                 </div>
               </div>
               <button
@@ -477,35 +494,37 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
               </button>
             </div>
 
-            {/* HISTORIAL DE LOGS DE CORREO */}
-            <div className="space-y-2">
+            {/* RENDERIZADO DEL MENSAJE CAPTURADO */}
+            <div className="space-y-3">
               {emailLogsList.length === 0 ? (
                 <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-center text-xs text-slate-400">
                   Aún no se han capturado correos entrantes para este expediente. Haga clic en "Sincronizar Correos" tras enviar la solicitud a Camerfirma.
                 </div>
               ) : (
-                emailLogsList.map((log: any) => (
-                  <div key={log.id} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-3">
-                      <span className="w-6 h-6 rounded-full bg-blue-100 text-[#00668c] font-bold flex items-center justify-center text-[10px]">
-                        #{log.emailSequenceNumber}
-                      </span>
-                      <div>
+                emailLogsList.map((log: any, index: number) => (
+                  <div key={log.id || index} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs">
+                    {/* Encabezado del Log */}
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-blue-100 text-[#00668c] font-bold flex items-center justify-center text-[10px]">
+                          #{log.emailSequenceNumber || index + 1}
+                        </span>
                         <p className="font-bold text-slate-800">{log.subject}</p>
-                        <p className="text-[10px] text-slate-400">De: {log.fromEmail}</p>
                       </div>
+                      <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-700 font-bold text-[10px] rounded-full flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3" /> Reenviado al Cliente
+                      </span>
                     </div>
-                    <div>
-                      {log.isFinalForwarded ? (
-                        <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 font-bold text-[10px] rounded-full flex items-center gap-1">
-                          <CheckCircle2 className="h-3 w-3" /> Reenviado al Cliente
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 bg-blue-100 text-blue-700 font-bold text-[10px] rounded-full">
-                          Auto-Aceptado
-                        </span>
-                      )}
-                    </div>
+
+                    {/* Cuerpo HTML oficial renderizado limpiamente dentro del contenedor */}
+                    {log.bodyHtml && (
+                      <div
+                        className="p-3 bg-white border border-slate-200 rounded-lg max-h-60 overflow-y-auto text-slate-700 text-xs leading-relaxed"
+                        dangerouslySetInnerHTML={{
+                          __html: formatBodyHtmlWithTarget(log.bodyHtml),
+                        }}
+                      />
+                    )}
                   </div>
                 ))
               )}
