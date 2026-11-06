@@ -4,7 +4,8 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, LookupDniResponse } from '@/services/api';
 import {
-  Building2, User, Zap, Upload, FileCheck, Shield, Check, Loader2, AlertCircle, Calendar, Edit3, ArrowRight, MailCheck
+  Building2, User, Zap, Upload, FileCheck, Shield, Check, Loader2, AlertCircle, Calendar, Edit3, ArrowRight, MailCheck,
+  Mail
 } from 'lucide-react';
 
 export default function NewCertificatePage() {
@@ -12,7 +13,7 @@ export default function NewCertificatePage() {
 
   const [step, setStep] = useState(1);
   const [entityType, setEntityType] = useState<'PERSONA_NATURAL' | 'EMPRESA'>('PERSONA_NATURAL');
-  const [planType, setPlanType] = useState<'ONE_SHOT' | 'ANNUAL'>('ONE_SHOT');
+  const [planType, setPlanType] = useState<'ONE_SHOT' | 'ANNUAL' | 'TWO_YEARS'>('ANNUAL');
   const [docType, setDocType] = useState<'DNI' | 'CE'>('DNI');
 
   // Formulario Persona Natural / Representante Legal
@@ -84,34 +85,34 @@ export default function NewCertificatePage() {
 
   // Consulta DNI (ApiPerú / RENIEC)
   useEffect(() => {
-  const cleanDni = documentNumber.replace(/\D/g, '');
+    const cleanDni = documentNumber.replace(/\D/g, '');
 
-  if (docType === 'DNI' && cleanDni.length === 8) {
-    setIsSearchingDni(true);
-    setDniError('');
+    if (docType === 'DNI' && cleanDni.length === 8) {
+      setIsSearchingDni(true);
+      setDniError('');
 
-    api.lookupDni(cleanDni)
-      .then(({ ok, data }: LookupDniResponse) => { // 👈 Tipado explícito para eliminar error 7031
-        setIsSearchingDni(false);
-        if (ok && (data?.nombreCompleto || data?.nombres)) {
-          const name = data.nombreCompleto || `${data.nombres} ${data.apellidoPaterno} ${data.apellidoMaterno}`;
-          setFullName(name);
-          setDniError('');
-        } else {
+      api.lookupDni(cleanDni)
+        .then(({ ok, data }: LookupDniResponse) => { // 👈 Tipado explícito para eliminar error 7031
+          setIsSearchingDni(false);
+          if (ok && (data?.nombreCompleto || data?.nombres)) {
+            const name = data.nombreCompleto || `${data.nombres} ${data.apellidoPaterno} ${data.apellidoMaterno}`;
+            setFullName(name);
+            setDniError('');
+          } else {
+            setFullName('');
+            setDniError('No se encontró el DNI en RENIEC. Verifique el número ingresado.');
+          }
+        })
+        .catch(() => {
+          setIsSearchingDni(false);
           setFullName('');
-          setDniError('No se encontró el DNI en RENIEC. Verifique el número ingresado.');
-        }
-      })
-      .catch(() => {
-        setIsSearchingDni(false);
-        setFullName('');
-        setDniError('Ocurrió un error al consultar RENIEC.');
-      });
-  } else {
-    setFullName('');
-    setDniError('');
-  }
-}, [documentNumber, docType]);
+          setDniError('Ocurrió un error al consultar RENIEC.');
+        });
+    } else {
+      setFullName('');
+      setDniError('');
+    }
+  }, [documentNumber, docType]);
 
   // Consulta RUC SUNAT (OpenRUC)
   useEffect(() => {
@@ -307,15 +308,16 @@ export default function NewCertificatePage() {
           </div>
         )}
 
-        {/* Paso 2: Selección de Plan */}
+        {/* Paso 2: Selección de Plan / Vigencia */}
         {step === 2 && (
           <div className="space-y-6 text-center">
-            <h2 className="text-xl font-bold text-slate-800">Seleccione su Plan de Firma</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto">
+            <h2 className="text-xl font-bold text-slate-800">Seleccione la Vigencia del Certificado</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
               <div
                 onClick={() => setPlanType('ONE_SHOT')}
-                className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col items-center space-y-2 ${planType === 'ONE_SHOT' ? 'border-[#00b8b8] bg-teal-50/20 shadow-sm' : 'border-slate-200'
-                  }`}
+                className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col items-center space-y-2 ${
+                  planType === 'ONE_SHOT' ? 'border-[#00b8b8] bg-teal-50/20 shadow-sm' : 'border-slate-200'
+                }`}
               >
                 <Zap className="h-7 w-7 text-amber-500 mx-auto" />
                 <h3 className="font-bold text-sm text-slate-800">Uso Único (One Shot)</h3>
@@ -324,12 +326,24 @@ export default function NewCertificatePage() {
 
               <div
                 onClick={() => setPlanType('ANNUAL')}
-                className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col items-center space-y-2 ${planType === 'ANNUAL' ? 'border-[#00b8b8] bg-teal-50/20 shadow-sm' : 'border-slate-200'
-                  }`}
+                className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col items-center space-y-2 ${
+                  planType === 'ANNUAL' ? 'border-[#00b8b8] bg-teal-50/20 shadow-sm' : 'border-slate-200'
+                }`}
               >
                 <Calendar className="h-7 w-7 text-[#00668c] mx-auto" />
-                <h3 className="font-bold text-sm text-slate-800">Plan Anual</h3>
-                <p className="text-[11px] text-slate-400">Validez completa de 1 año ilimitado</p>
+                <h3 className="font-bold text-sm text-slate-800">Vigencia 1 Año</h3>
+                <p className="text-[11px] text-slate-400">Validez estándar de 1 año</p>
+              </div>
+
+              <div
+                onClick={() => setPlanType('TWO_YEARS')}
+                className={`p-5 rounded-2xl border-2 cursor-pointer transition-all flex flex-col items-center space-y-2 ${
+                  planType === 'TWO_YEARS' ? 'border-[#00b8b8] bg-teal-50/20 shadow-sm' : 'border-slate-200'
+                }`}
+              >
+                <Calendar className="h-7 w-7 text-emerald-600 mx-auto" />
+                <h3 className="font-bold text-sm text-slate-800">Vigencia 2 Años</h3>
+                <p className="text-[11px] text-slate-400">Validez extendida de 2 años</p>
               </div>
             </div>
           </div>
@@ -547,30 +561,41 @@ export default function NewCertificatePage() {
             )}
 
             {/* Bloque de Autorización de Alias */}
-            <div className="mt-4 p-3.5 bg-blue-50/70 border border-blue-200 rounded-2xl space-y-2">
-              <label className="flex items-start gap-2.5 cursor-pointer">
+            {/* Checkbox y Simulación de Correo de Gestión */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+              <label className="flex items-start gap-3 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={useTempEmail}
                   onChange={(e) => setUseTempEmail(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#00668c] focus:ring-[#00668c]"
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 />
                 <div>
-                  <span className="font-bold text-slate-800 text-xs block">
-                    Autorizar gestión automatizada de correos (Recomendado)
+                  <span className="text-sm font-semibold text-slate-800">
+                    Autorizar gestión automatizada de verificación (Recomendado)
                   </span>
-                  <p className="text-[10px] text-slate-500 leading-normal mt-0.5">
-                    Permite la creación de una cuenta temporal ligada a su DNI para la auto-aceptación de verificaciones enviadas por Camerfirma.
+                  <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                    Habilita la sincronización operativa de Hyperion para recepcionar y procesar automáticamente los correos de confirmación técnica emitidos por Camerfirma.
                   </p>
                 </div>
               </label>
 
               {useTempEmail && (
-                <div className="mt-2 p-2 bg-white/80 border border-blue-100 rounded-xl flex items-center gap-2 text-[11px] text-blue-900 font-mono">
-                  <MailCheck className="h-4 w-4 text-[#00668c] shrink-0" />
-                  <span className="truncate">
-                    Correo de gestión: <strong>{generatedTempEmail}</strong>
-                  </span>
+                <div className="space-y-2 pt-2 border-t border-slate-200/70">
+                  <div className="flex items-center gap-2 bg-white border border-indigo-100 rounded-lg p-2.5 text-xs text-indigo-950 font-medium">
+                    <Mail className="h-4 w-4 text-indigo-600 shrink-0" />
+                    <span>
+                      Correo de gestión técnica:{" "}
+                      <strong className="font-mono text-indigo-600 font-bold">
+                        {documentNumber ? `${documentNumber}@hyperion.com.pe` : "DNI@hyperion.com.pe"}
+                      </strong>
+                    </span>
+                  </div>
+
+                  {/* Disclaimer legal y de privacidad */}
+                  <div className="rounded-lg bg-amber-50/80 border border-amber-200 p-2.5 text-[11px] text-amber-900 leading-normal">
+                    <strong>Aviso de privacidad y gestión:</strong> Este correo no constituye una casilla personal de uso general ni almacena mensajes de terceros. Funciona exclusivamente como un alias de enrutamiento técnico de Hyperion para la automatización del expediente ante la Entidad de Certificación, garantizando que sus notificaciones oficiales definitivas se envíen siempre a su <em>Correo Electrónico Personal</em>.
+                  </div>
                 </div>
               )}
             </div>

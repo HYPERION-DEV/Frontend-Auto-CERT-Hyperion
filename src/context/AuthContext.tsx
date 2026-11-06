@@ -7,9 +7,13 @@ import { SessionExpiredModal } from '@/components/auth/SessionExpiredModal';
 
 interface AuthContextType {
   isSessionExpired: boolean;
+  logout: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({ isSessionExpired: false });
+const AuthContext = createContext<AuthContextType>({
+  isSessionExpired: false,
+  logout: async () => {},
+});
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isSessionExpired, setIsSessionExpired] = useState(false);
@@ -20,13 +24,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     document.cookie = 'session_exp=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
   };
 
+  const logout = async () => {
+    // Limpiar cookies de sesión en el cliente
+    document.cookie = 'session_exp=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'auth_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    window.location.href = '/login';
+  };
+
   useEffect(() => {
-    // 1. Escuchador reactivo para peticiones HTTP 401 de la API
+    // 1. Escuchador reactivo para peticiones HTTP 401 interceptadas en la API
     setOnSessionExpired(() => {
       triggerExpiredModal();
     });
 
-    // 2. TEMPORIZADOR PASIVO SINCRONIZADO CON LA COOKIE
+    // 2. Temporizador pasivo sincronizado con la cookie session_exp
     const getSessionExpFromCookie = () => {
       const match = document.cookie.match(/(?:^|; )session_exp=([^;]*)/);
       return match ? parseInt(match[1], 10) : null;
@@ -38,10 +50,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const timeRemaining = expTime - Date.now();
 
       if (timeRemaining <= 0) {
-        // La cookie ya venció
         triggerExpiredModal();
       } else {
-        // Programamos el disparo exacto cuando la cookie expire
         const timer = setTimeout(() => {
           triggerExpiredModal();
         }, timeRemaining);
@@ -52,9 +62,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ isSessionExpired }}>
+    <AuthContext.Provider value={{ isSessionExpired, logout }}>
       {children}
-      {/* Modal flotante global */}
       <SessionExpiredModal isOpen={isSessionExpired} />
     </AuthContext.Provider>
   );

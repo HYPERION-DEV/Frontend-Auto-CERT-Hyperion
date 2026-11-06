@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { KeyRound, Mail, Lock, ArrowRight, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
+import { KeyRound, Mail, Lock, ArrowRight, ArrowLeft, ShieldCheck, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/services/api';
 
 export default function LoginPage() {
@@ -36,6 +37,18 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
+      
+      {/* Botón superior para volver al inicio */}
+      <div className="sm:mx-auto sm:w-full sm:max-w-md mb-2 px-4 sm:px-0">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-[#00668c] transition-colors group"
+        >
+          <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
+          <span>Volver a la página principal</span>
+        </Link>
+      </div>
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center space-y-3">
         <Image 
           src="/logo-hyperion.png" 

@@ -9,7 +9,7 @@ export interface LookupDniResponse {
     apellidoMaterno?: string;
   };
 }
-const API_JSON_TOKEN = process.env.NEXT_PUBLIC_API_JSON_TOKEN || '72f4a7f38b710a7687193ca840f9aaa5e5944e8aaf34b6d339602bf8a370';
+const API_JSON_TOKEN = process.env.NEXT_PUBLIC_API_JSON_TOKEN || '3839d27458cef6efdde592873b4ac672b330150414bda1a47222b19ed7db';
 export interface LoginPayload {
   email: string;
   password: string;
@@ -102,6 +102,15 @@ export const api = {
   async logout() {
     const res = await fetch(`${BACKEND_URL}/api/auth/logout`, {
       method: 'POST',
+      credentials: 'include',
+    });
+    return handleResponse(res);
+  },
+
+  async getUserProfile() {
+    const res = await fetch(`${BACKEND_URL}/api/user/profile`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
     });
     return handleResponse(res);
